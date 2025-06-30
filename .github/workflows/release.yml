@@ -25,16 +25,15 @@ jobs:
           echo "Building version $VERSION"
           mkdir -p dist
 
-          for osarch in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            GOOS=${osarch%/*}
-            GOARCH=${osarch##*/}
-            BINARY_NAME=apiping-$VERSION-$GOOS-$GOARCH
-            if [ "$GOOS" = "windows" ]; then
-              BINARY_NAME+=".exe"
-            fi
-
-            echo "Building for $GOOS/$GOARCH..."
-            CGO_ENABLED=0 go build -o dist/$BINARY_NAME
+          for osarch in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+            GOOS=$${osarch%/*} \
+            GOARCH=$${osarch##*/} \
+            BINARY_NAME=apiping-$VERSION-$GOOS-$GOARCH ; \
+            if [ "$$GOOS" = "windows" ]; then \
+              BINARY_NAME=$$BINARY_NAME.exe ; \
+            fi ; \
+            echo "Building for $$GOOS/\$$GOARCH -> \$\$BINARY_NAME" ; \
+            CGO_ENABLED=0 GOOS=\$$GOOS GOARCH=\$$GOARCH go build -o dist/\$$BINARY_NAME ; \
           done
 
       - name: Archive artifacts
@@ -42,9 +41,9 @@ jobs:
           cd dist
           for file in *; do
             if [[ "$file" == *"windows"* ]]; then
-              zip "${file}.zip" "$file"
+              zip "\${file}.zip" "\$file"
             else
-              tar -czf "${file}.tar.gz" "$file"
+              tar -czf "\${file}.tar.gz" "\$file"
             fi
           done
 

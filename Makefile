@@ -5,7 +5,6 @@ OUTPUT_DIR=dist
 GOOS := $(shell go env GOOS)
 GOARCH := $(shell go env GOARCH)
 
-# Get latest git tag or use "dev"
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 GIT_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null || echo $(VERSION))
 

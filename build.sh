@@ -11,8 +11,8 @@ echo "Building version: $VERSION"
 rm -rf dist/
 mkdir -p dist/
 
-# Get GOOS and GOARCH
-PLATFORMS=("linux/amd64" "darwin/amd64" "windows/amd64")
+# Build for multiple platforms
+PLATFORMS=("linux/amd64" "linux/arm64" "darwin/amd64" "darwin/arm64" "windows/amd64")
 
 for PLATFORM in "${PLATFORMS[@]}"
 do
@@ -24,7 +24,7 @@ do
     fi
 
     echo "Building for $GOOS/$GOARCH..."
-    CGO_ENABLED=0 go build -o dist/$OUTPUT_NAME
+    CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -o dist/$OUTPUT_NAME
 done
 
 echo "Build complete. Binaries are in ./dist/"

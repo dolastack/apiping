@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -110,7 +111,7 @@ func tcpPingHost(addr string, timeout time.Duration) error {
 	return nil
 }
 
-func apiping(url string) {
+func apiping(targetURL string) {
 	client := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
@@ -127,7 +128,7 @@ func apiping(url string) {
 		}
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		fmt.Printf("Request failed: %s\n", err)
 		return
@@ -161,7 +162,7 @@ func apiping(url string) {
 	rtt := time.Since(dnsStart).Seconds() * 1000 // total RTT in ms
 
 	var result PingResult
-	result.URL = url
+	result.URL = targetURL
 	result.Timestamp = time.Now().Format(time.RFC3339)
 
 	if err != nil {
@@ -231,14 +232,14 @@ func main() {
 		flag.Usage()
 	}
 
-	url := args[0]
+	targetURL := args[0]
 
 	// Normalize URL if no scheme is provided
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		url = "https://" + url
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "https://" + targetURL
 	}
 
-	u, err := urlpkg.Parse(url)
+	u, err := url.Parse(targetURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid URL: %v\n", err)
 		os.Exit(1)
@@ -271,12 +272,12 @@ func main() {
 
 	if count <= 0 {
 		for {
-			apiping(url)
+			apiping(targetURL)
 			time.Sleep(interval)
 		}
 	} else {
 		for i := 0; i < count; i++ {
-			apiping(url)
+			apiping(targetURL)
 			time.Sleep(interval)
 		}
 	}
