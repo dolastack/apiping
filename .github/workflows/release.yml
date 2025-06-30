@@ -1,0 +1,69 @@
+name: Release apiping
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v1.0.0
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Build binaries
+        run: |
+          VERSION=$(echo ${GITHUB_REF} | cut -d '/' -f3)
+          echo "Building version $VERSION"
+          mkdir -p dist
+
+          for osarch in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS=${osarch%/*}
+            GOARCH=${osarch##*/}
+            BINARY_NAME=apiping-$VERSION-$GOOS-$GOARCH
+            if [ "$GOOS" = "windows" ]; then
+              BINARY_NAME+=".exe"
+            fi
+
+            echo "Building for $GOOS/$GOARCH..."
+            CGO_ENABLED=0 go build -o dist/$BINARY_NAME
+          done
+
+      - name: Archive artifacts
+        run: |
+          cd dist
+          for file in *; do
+            if [[ "$file" == *"windows"* ]]; then
+              zip "${file}.zip" "$file"
+            else
+              tar -czf "${file}.tar.gz" "$file"
+            fi
+          done
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Artifacts
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/
+          asset_content_type: application/octet-stream
