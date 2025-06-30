@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,18 +19,21 @@ import (
 )
 
 var (
-	count       int
-	interval    time.Duration
-	verbose     bool
-	showBody    bool
-	basicAuth   string
-	bearer      string
-	jsonOut     bool
-	timeout     time.Duration
-	insecure    bool
-	dnsOnly     bool
-	tcpPing     string
-	headerPairs []string
+	count           int
+	interval        time.Duration
+	verbose         bool
+	showBody        bool
+	basicAuth       string
+	bearer          string
+	jsonOut         bool
+	timeout         time.Duration
+	insecure        bool
+	dnsOnly         bool
+	dnsTrace        bool
+	tcpPing         string
+	followRedirects bool
+	maxRedirects    int
+	headerPairs     []string
 )
 
 func init() {
@@ -43,7 +47,10 @@ func init() {
 	flag.DurationVar(&timeout, "t", 10*time.Second, "Timeout for each request")
 	flag.BoolVar(&insecure, "insecure", false, "Skip TLS certificate verification")
 	flag.BoolVar(&dnsOnly, "dns", false, "Resolve DNS only (no HTTP request)")
+	flag.BoolVar(&dnsTrace, "dns-trace", false, "Show full DNS resolution trace (like dig +trace)")
 	flag.StringVar(&tcpPing, "tcp", "", "Test TCP connection to host:port")
+	flag.BoolVar(&followRedirects, "L", false, "Follow HTTP redirects")
+	flag.IntVar(&maxRedirects, "max-redirects", 10, "Maximum number of redirects to follow")
 	flag.Var((*stringValue)(&headerPairs), "H", "Custom HTTP header(s), e.g., -H \"Authorization: Bearer token\"")
 }
 
@@ -59,14 +66,15 @@ func (v *stringValue) String() string {
 }
 
 type PingResult struct {
-	URL          string  `json:"url"`
-	RTT          float64 `json:"rtt_ms"`
-	StatusCode   int     `json:"status_code,omitempty"`
-	BodySize     int     `json:"body_size,omitempty"`
-	DNSDuration  float64 `json:"dns_ms,omitempty"`
-	ConnDuration float64 `json:"conn_ms,omitempty"`
-	Error        string  `json:"error,omitempty"`
-	Timestamp    string  `json:"timestamp"`
+	URL          string   `json:"url"`
+	RTT          float64  `json:"rtt_ms"`
+	StatusCode   int      `json:"status_code,omitempty"`
+	BodySize     int      `json:"body_size,omitempty"`
+	DNSDuration  float64  `json:"dns_ms,omitempty"`
+	ConnDuration float64  `json:"conn_ms,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	Timestamp    string   `json:"timestamp"`
+	Redirects    []string `json:"redirects,omitempty"`
 }
 
 func supportsColor() bool {
@@ -94,6 +102,59 @@ func dnsLookup(host string) error {
 	for _, ip := range ips {
 		fmt.Println(ip.String())
 	}
+	return nil
+}
+
+func dnsTraceLookup(domain string) error {
+	resolver := &net.Resolver{}
+
+	fmt.Printf(";; DNS trace for %s\n", domain)
+
+	// Step 1: Get NS records from root resolver
+	ns, err := resolver.LookupNS(context.Background(), ".")
+	if err != nil {
+		return fmt.Errorf("failed to query root servers: %w", err)
+	}
+	fmt.Printf(";; Querying root servers for .\n")
+	for _, srv := range ns {
+		fmt.Printf(".\tIN\tNS\t%s\n", srv.Host)
+	}
+
+	// Step 2: Query TLD
+	parts := strings.SplitN(domain, ".", 2)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid domain")
+	}
+	tld := "." + parts[1]
+	tldServers, err := resolver.LookupNS(context.Background(), tld)
+	if err != nil {
+		return fmt.Errorf("failed to query TLD servers for %s: %w", tld, err)
+	}
+	fmt.Printf(";; Querying TLD servers for %s\n", tld)
+	for _, srv := range tldServers {
+		fmt.Printf("%s\tIN\tNS\t%s\n", tld, srv.Host)
+	}
+
+	// Step 3: Query authoritative nameservers for domain
+	authServers, err := resolver.LookupNS(context.Background(), domain)
+	if err != nil {
+		return fmt.Errorf("failed to query authoritative servers for %s: %w", domain, err)
+	}
+	fmt.Printf(";; Querying authoritative servers for %s\n", domain)
+	for _, srv := range authServers {
+		fmt.Printf("%s\tIN\tNS\t%s\n", domain, srv.Host)
+	}
+
+	// Step 4: Final lookup
+	ips, err := resolver.LookupIP(context.Background(), "ip", domain)
+	if err != nil {
+		return fmt.Errorf("failed to resolve IP for %s: %w", err)
+	}
+	fmt.Printf(";; Final A/AAAA records for %s\n", domain)
+	for _, ip := range ips {
+		fmt.Printf("%s\tIN\tA\t%s\n", domain, ip.String())
+	}
+
 	return nil
 }
 
@@ -125,6 +186,18 @@ func apiping(targetURL string) {
 	if insecure {
 		client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true,
+		}
+	}
+
+	// Redirect handling
+	var redirects []string
+	if followRedirects {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			redirects = append(redirects, req.URL.String())
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
 		}
 	}
 
@@ -164,6 +237,7 @@ func apiping(targetURL string) {
 	var result PingResult
 	result.URL = targetURL
 	result.Timestamp = time.Now().Format(time.RFC3339)
+	result.Redirects = redirects
 
 	if err != nil {
 		result.Error = err.Error()
@@ -212,6 +286,14 @@ func apiping(targetURL string) {
 		}
 		fmt.Printf("HTTP/%d.%d %s %d bytes from %s (%s): rtt=%.2f ms\n",
 			resp.ProtoMajor, resp.ProtoMinor, status, bodySize, host, ip, rtt)
+
+		// Show redirect path if any
+		if len(redirects) > 0 {
+			fmt.Printf("Redirect path:\n")
+			for i, loc := range redirects {
+				fmt.Printf(" #%d  %s\n", i+1, loc)
+			}
+		}
 	} else {
 		fmt.Printf("[%s] %.2f ms\n", status, rtt)
 	}
@@ -246,14 +328,13 @@ func main() {
 	}
 
 	host := u.Hostname()
-	port := u.Port()
-
-	if port == "" {
-		port = "443"
-	}
 
 	if dnsOnly {
-		err := dnsLookup(host)
+		if dnsTrace {
+			err := dnsTraceLookup(host)
+		} else {
+			err := dnsLookup(host)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "DNS lookup failed: %v\n", err)
 			os.Exit(1)
